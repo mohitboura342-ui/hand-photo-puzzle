@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Hand Photo AR</title>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+<style>
+  :root{
+    --bg:#04140f;
+    --glass-bg: rgba(10, 30, 20, 0.45);
+    --glass-border: rgba(255,255,255,0.15);
+    --accent:#7CFFB2;
+    --accent-2:#0fd6c9;
+    --accent-gold:#ffd166;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{
+    font-family:'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+    background:var(--bg);
+    color:#fff;
+    overflow:hidden;
+    height:100vh;
+    width:100vw;
+  }
+  .stage{position:absolute;inset:0;}
+  .input_video{
+    position:absolute; top:0; left:0; width:100%; height:100%;
+    object-fit:cover;
+    transform:scaleX(-1);
+    z-index:0;
+    filter:brightness(0.9) saturate(1);
+    transition:opacity 0.35s ease;
+  }
+  #mainCanvas{
+    position:absolute; top:0; left:0; width:100%; height:100%;
+    object-fit:cover;
+    transform:scaleX(-1);
+    z-index:5;
+    pointer-events:none;
+    transition:opacity 0.35s ease;
+  }
+  #hud{
+    position:absolute; top:16px; left:16px; z-index:10;
+    display:flex; flex-direction:column; gap:12px;
+    pointer-events:auto;
+  }
+  .panel{
+    background:var(--glass-bg);
+    backdrop-filter:blur(14px);
+    -webkit-backdrop-filter:blur(14px);
+    border:1px solid var(--glass-border);
+    border-radius:14px;
+    padding:14px 18px;
+    box-shadow:0 8px 30px rgba(0,0,0,0.45);
+    min-width:190px;
+  }
+  .stat{
+    display:flex;
+    justify-content:space-between;
+    gap:20px;
+    font-size:0.85rem;
+    color:rgba(255,255,255,0.85);
+    margin-bottom:6px;
+  }
+  .stat:last-child{margin-bottom:0;}
+  .stat .val{font-weight:700; color:var(--accent);}
+  .hint{
+    position:absolute; bottom:100px; left:50%; transform:translateX(-50%);
+    z-index:10; font-size:0.95rem; color:rgba(255,255,255,0.75);
+    text-align:center; pointer-events:none;
+    text-shadow:0 2px 8px rgba(0,0,0,0.6);
+  }
+  #startOverlay{
+    position:absolute; inset:0; background:rgba(2,10,6,0.92); z-index:100;
+    display:flex; flex-direction:column; justify-content:center; align-items:center;
+    backdrop-filter:blur(10px); transition:opacity 0.5s ease; text-align:center; padding:20px;
+  }
+  #startOverlay h1{
+    font-weight:300;
+    letter-spacing:3px;
+    margin-bottom:14px;
+    font-size:1.8rem;
+  }
+  #startOverlay p{
+    color:#9fd;
+    margin-bottom:34px;
+    max-width:420px;
+    line-height:1.5;
+  }
+  .start-btn{
+    padding:15px 38px;
+    font-size:1.05rem;
+    background:linear-gradient(45deg,#2ecc71,#0fd6c9);
+    border:none;
+    color:#04140f;
+    border-radius:30px;
+    cursor:pointer;
+    box-shadow:0 0 25px rgba(46,204,113,0.5);
+    font-weight:700;
+    text-transform:uppercase;
+    letter-spacing:1.5px;
+    transition:transform 0.2s;
+    margin:8px;
+  }
+  .start-btn:hover{transform:scale(1.05);}
+  .hidden{opacity:0; pointer-events:none;}
+
+  .fist-progress{
+    width:100%;
+    height:6px;
+    border-radius:4px;
+    background:rgba(255,255,255,0.12);
+    overflow:hidden;
+    margin-top:8px;
+  }
+  .fist-progress-fill{
+    height:100%;
+    width:0%;
+    background:linear-gradient(90deg, var(--accent), var(--accent-2));
+    border-radius:4px;
+    transition:width 0.08s linear;
+  }
+
+  .flash-overlay{
+    position:absolute; inset:0;
+    background:#fff;
+    opacity:0;
+    z-index:250;
+    pointer-events:none;
+  }
+  .flash-overlay.flash-active{
+    animation:flashPulse 0.45s ease-out forwards;
+  }
+  @keyframes flashPulse{
+    0%{opacity:0;}
+    12%{opacity:0.95;}
+    100%{opacity:0;}
+  }
+
+  .photo-reveal{
+    position:absolute; inset:0;
+    z-index:120;
+    background:rgba(2,10,6,0.94);
+    display:flex; align-items:center; justify-content:center;
+    opacity:0;
+    pointer-events:none;
+    transition:opacity 0.5s ease;
+  }
+  .photo-reveal.active{opacity:1;}
+  .photo-reveal img{
+    max-width:80vw;
+    max-height:80vh;
+    border-radius:22px;
+    box-shadow:0 0 60px rgba(124,255,178,0.35), 0 20px 60px rgba(0,0,0,0.6);
+    animation:revealZoom 2s cubic-bezier(0.19,1,0.22,1) forwards;
+  }
+  @keyframes revealZoom{
+    0%{ transform:scale(1.22); filter:brightness(1.3); }
+    30%{ filter:brightness(1.05); }
+    100%{ transform:scale(1); filter:brightness(1); }
+  }
+
+  .puzzle-screen{
+    position:absolute; inset:0;
+    z-index:150;
+    display:none;
+    flex-direction:column;
+    align-items:center;
+    justify-content:flex-start;
+    gap:18px;
+    padding:20px;
+    background:radial-gradient(circle at 50% 20%, rgba(20,60,45,0.55), rgba(2,10,6,0.97) 70%);
+    overflow:hidden;
+  }
+  .puzzle-screen.active{
+    display:flex;
+    animation:puzzleFadeIn 0.5s ease;
+  }
+  @keyframes puzzleFadeIn{from{opacity:0;} to{opacity:1;}}
+  .puzzle-topbar{
+    display:flex;
+    align-items:center;
+    gap:22px;
+    flex-wrap:wrap;
+    justify-content:center;
+  }
+  .size-select{
+    display:flex;
+    gap:8px;
+  }
+  .size-btn{
+    padding:6px 14px;
+    font-size:0.8rem;
+    font-weight:700;
+    letter-spacing:0.5px;
+    border-radius:20px;
+    border:1px solid var(--glass-border);
+    background:rgba(255,255,255,0.06);
+    color:rgba(255,255,255,0.75);
+    cursor:pointer;
+    transition:all 0.2s ease;
+  }
+  .size-btn:hover{border-color:var(--accent); color:#fff;}
+  .size-btn.active{
+    background:linear-gradient(45deg,#2ecc71,#0fd6c9);
+    color:#04140f;
+    border-color:transparent;
+  }
+  .puzzle-board-wrap{
+    flex:1;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    width:100%;
+  }
+  .puzzle-board{
+    position:relative;
+    border-radius:20px;
+    background:rgba(255,255,255,0.03);
+    border:1px solid var(--glass-border);
+    box-shadow:0 20px 60px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(255,255,255,0.03);
+    background-size:cover;
+    background-position:center;
+    transition:background-image 0.2s ease;
+  }
+  .puzzle-slot{
+    position:absolute;
+    border:1px dashed rgba(255,255,255,0.08);
+    border-radius:10px;
+  }
+  .puzzle-piece{
+    position:absolute;
+    border-radius:10px;
+    background-size:100% 100%;
+    background-position:center;
+    box-shadow:0 6px 18px rgba(0,0,0,0.45);
+    cursor:grab;
+    touch-action:none;
+    transition:left 0.25s cubic-bezier(0.34,1.56,0.64,1),
+               top 0.25s cubic-bezier(0.34,1.56,0.64,1),
+               box-shadow 0.2s ease,
+               transform 0.2s ease,
+               opacity 0.5s ease;
+    border:1px solid rgba(255,255,255,0.15);
+  }
+  .puzzle-piece:hover{
+    box-shadow:0 0 0 2px var(--accent), 0 10px 26px rgba(124,255,178,0.35);
+    transform:scale(1.02);
+    z-index:20;
+  }
+  .puzzle-piece.dragging{
+    cursor:grabbing;
+    box-shadow:0 0 0 3px var(--accent-2), 0 18px 40px rgba(0,0,0,0.6);
+    transform:scale(1.06);
+  }
+  .puzzle-piece.locked{
+    cursor:default;
+    box-shadow:0 0 0 2px rgba(124,255,178,0.6);
+  }
+  .puzzle-piece.locked:hover{transform:none;}
+  .puzzle-board.solved-reveal .puzzle-piece{opacity:0;}
+  .puzzle-controls{
+    display:flex;
+    gap:14px;
+    flex-wrap:wrap;
+    justify-content:center;
+    padding-bottom:10px;
+  }
+  .puzzle-controls .start-btn{
+    padding:12px 26px;
+    font-size:0.85rem;
+  }
+
+  .victory-overlay{
+    position:absolute; inset:0;
+    z-index:300;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    background:rgba(2,10,6,0.85);
+    backdrop-filter:blur(6px);
+  }
+  .victory-overlay.active{
+    display:flex;
+    animation:puzzleFadeIn 0.4s ease;
+  }
+  #confettiCanvas{
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    pointer-events:none;
+  }
+  .victory-card{
+    position:relative;
+    z-index:2;
+    text-align:center;
+    padding:40px 50px;
+    min-width:320px;
+    animation:victoryPop 0.5s cubic-bezier(0.34,1.56,0.64,1);
+  }
+  @keyframes victoryPop{
+    0%{ transform:scale(0.7); opacity:0; }
+    100%{ transform:scale(1); opacity:1; }
+  }
+  .victory-card h2{
+    font-size:1.6rem;
+    margin-bottom:22px;
+    letter-spacing:1px;
+  }
+  .victory-stats{
+    display:flex;
+    gap:30px;
+    justify-content:center;
+    margin-bottom:28px;
+  }
+  .victory-stats div{
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+    font-size:0.8rem;
+    color:rgba(255,255,255,0.65);
+    text-transform:uppercase;
+    letter-spacing:1px;
+  }
+  .victory-stats div span{
+    font-size:1.5rem;
+    font-weight:700;
+    color:var(--accent-gold);
+  }
+</style>
+</head>
+<body>
+
+<div id="startOverlay">
+  <h1>📸 HAND PHOTO AR</h1>
+  <p>Open your hand in front of the camera. This mode keeps the camera clean and lets you capture a photo with one tap — or close your hand into a fist and hold it for a second to auto-capture and start a photo puzzle!</p>
+  <button class="start-btn" id="startBtn">Enter Experience</button>
+</div>
+
+<div class="stage">
+  <video class="input_video" autoplay playsinline muted></video>
+  <canvas id="mainCanvas"></canvas>
+</div>
+
+<div id="hud" class="hidden">
+  <div class="panel">
+    <div class="stat">Hands Detected <span class="val" id="ui-hands">0</span></div>
+    <div class="stat">Gesture <span class="val" id="ui-gesture">None</span></div>
+    <div class="stat">Fist Hold <span class="val" id="ui-holdlabel">0%</span></div>
+    <div class="fist-progress"><div class="fist-progress-fill" id="fist-progress-fill"></div></div>
+  </div>
+  <button class="start-btn" id="captureBtn">Capture Photo</button>
+</div>
+
+<div class="hint hidden" id="hint">Open your hand and hold it steady ✋ — or make a fist ✊ for 1 second to start the puzzle</div>
+
+<div class="flash-overlay" id="flashOverlay"></div>
+
+<div class="photo-reveal" id="photoReveal">
+  <img id="revealImage" alt="Captured photo preview" />
+</div>
+
+<div class="puzzle-screen" id="puzzleScreen">
+  <div class="puzzle-topbar panel">
+    <div class="stat">Moves <span class="val" id="puzzle-moves">0</span></div>
+    <div class="stat">Time <span class="val" id="puzzle-timer">00:00</span></div>
+    <div class="size-select" id="sizeSelect">
+      <button class="size-btn" data-size="3">3×3</button>
+      <button class="size-btn active" data-size="4">4×4</button>
+      <button class="size-btn" data-size="5">5×5</button>
+    </div>
+  </div>
+
+  <div class="puzzle-board-wrap">
+    <div class="puzzle-board" id="puzzleBoard"></div>
+  </div>
+
+  <div class="puzzle-controls">
+    <button class="start-btn" id="restartPuzzleBtn">Restart</button>
+    <button class="start-btn" id="newPhotoBtn">Capture New Photo</button>
+  </div>
+</div>
+
+<div class="victory-overlay" id="victoryOverlay">
+  <canvas id="confettiCanvas"></canvas>
+  <div class="victory-card panel">
+    <h2>🎉 Puzzle Solved!</h2>
+    <div class="victory-stats">
+      <div>Time Taken<span id="victory-time">00:00</span></div>
+      <div>Moves<span id="victory-moves">0</span></div>
+    </div>
+    <button class="start-btn" id="playAgainBtn">Play Again</button>
+  </div>
+</div>
+
+<script>
+const videoElement = document.querySelector('.input_video');
+const mainCanvas = document.getElementById('mainCanvas');
+const ctx = mainCanvas.getContext('2d');
+
+const uiHands = document.getElementById('ui-hands');
+const uiGesture = document.getElementById('ui-gesture');
+const hint = document.getElementById('hint');
+const captureBtn = document.getElementById('captureBtn');
+const hud = document.getElementById('hud');
+const startOverlay = document.getElementById('startOverlay');
+
+const flashOverlay = document.getElementById('flashOverlay');
+const photoReveal = document.getElementById('photoReveal');
+const revealImage = document.getElementById('revealImage');
+const puzzleScreen = document.getElementById('puzzleScreen');
+const puzzleBoard = document.getElementById('puzzleBoard');
+const puzzleMovesEl = document.getElementById('puzzle-moves');
+const puzzleTimerEl = document.getElementById('puzzle-timer');
+const restartPuzzleBtn = document.getElementById('restartPuzzleBtn');
+const newPhotoBtn = document.getElementById('newPhotoBtn');
+const victoryOverlay = document.getElementById('victoryOverlay');
+const victoryTimeEl = document.getElementById('victory-time');
+const victoryMovesEl = document.getElementById('victory-moves');
+const playAgainBtn = document.getElementById('playAgainBtn');
+const confettiCanvas = document.getElementById('confettiCanvas');
+const sizeButtons = document.querySelectorAll('.size-btn');
+const fistProgressFill = document.getElementById('fist-progress-fill');
+const uiHoldLabel = document.getElementById('ui-holdlabel');
+
+let width = window.innerWidth;
+let height = window.innerHeight;
+let currentHands = [];
+let camera = null;
+let hands = null;
+let started = false;
+
+function resize(){
+  width = window.innerWidth;
+  height = window.innerHeight;
+  mainCanvas.width = width;
+  mainCanvas.height = height;
+}
+window.addEventListener('resize', resize);
+resize();
+
+function mapToCanvas(landmark){
+  return { x: landmark.x * width, y: landmark.y * height };
+}
+
+function dist(a,b){
+  return Math.hypot(a.x-b.x, a.y-b.y);
+}
+
+function analyzeHand(lm){
+  const wrist = lm[0];
+  const fingers = [
+    {tip: lm[8], mcp: lm[5]},
+    {tip: lm[12], mcp: lm[9]},
+    {tip: lm[16], mcp: lm[13]},
+    {tip: lm[20], mcp: lm[17]},
+  ];
+  let extended = 0;
+  fingers.forEach(f=>{
+    const tipD = dist(wrist, f.tip);
+    const mcpD = dist(wrist, f.mcp);
+    if (tipD > mcpD * 1.25) extended++;
+  });
+  const thumbTipD = dist(wrist, lm[4]);
+  const thumbMcpD = dist(wrist, lm[2]);
+  if (thumbTipD > thumbMcpD * 1.15) extended++;
+  return { openness: extended / 5, extended };
+}
+
+function drawHandOverlay(lm){
+  const points = [0, 5, 9, 13, 17, 8, 12, 16, 20];
+  ctx.save();
+  ctx.strokeStyle = 'rgba(124,255,178,0.85)';
+  ctx.fillStyle = 'rgba(124,255,178,0.95)';
+  ctx.lineWidth = 3;
+  for (const i of points){
+    const p = mapToCanvas(lm[i]);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const wrist = mapToCanvas(lm[0]);
+  const idx = mapToCanvas(lm[5]);
+  const pinky = mapToCanvas(lm[17]);
+  const palm = { x: (wrist.x + idx.x + pinky.x) / 3, y: (wrist.y + idx.y + pinky.y) / 3 };
+  ctx.beginPath();
+  ctx.arc(palm.x, palm.y, 10, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function renderLoop(){
+  requestAnimationFrame(renderLoop);
+  ctx.clearRect(0, 0, width, height);
+  currentHands.forEach(lm => drawHandOverlay(lm));
+  uiHands.innerText = currentHands.length;
+
+  if (currentHands.length === 0) {
+    uiGesture.innerText = 'None';
+  } else {
+    const { openness } = analyzeHand(currentHands[0]);
+    uiGesture.innerText = openness >= 0.8 ? 'Open Hand ✋' : (openness <= 0.2 ? 'Fist ✊' : 'Partial');
+  }
+
+  hint.style.opacity = currentHands.length === 0 ? '1' : '0';
+  checkFistHold();
+}
+
+async function initMediaPipe(){
+  hands = new Hands({
+    locateFile: (file)=> `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+  hands.setOptions({
+    maxNumHands: 2,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.7,
+    minTrackingConfidence: 0.6
+  });
+  hands.onResults((results)=>{
+    currentHands = results.multiHandLandmarks || [];
+  });
+  camera = new Camera(videoElement, {
+    onFrame: async ()=>{ await hands.send({image: videoElement}); },
+    width: 1280,
+    height: 720,
+    facingMode: 'user'
+  });
+  await camera.start();
+}
+
+function capturePhoto(){
+  const shot = document.createElement('canvas');
+  shot.width = videoElement.videoWidth || width;
+  shot.height = videoElement.videoHeight || height;
+  const shotCtx = shot.getContext('2d');
+  shotCtx.translate(shot.width, 0);
+  shotCtx.scale(-1, 1);
+  shotCtx.drawImage(videoElement, 0, 0, shot.width, shot.height);
+  const dataUrl = shot.toDataURL('image/png');
+  const link = document.createElement('a');
+  link.download = 'hand-photo.png';
+  link.href = dataUrl;
+  link.click();
+  revealImage.src = dataUrl;
+  photoReveal.classList.add('active');
+  setTimeout(()=> photoReveal.classList.remove('active'), 1200);
+}
+
+captureBtn.addEventListener('click', capturePhoto);
+
+document.getElementById('startBtn').addEventListener('click', async ()=>{
+  if (started) return;
+  started = true;
+  try{
+    await initMediaPipe();
+    startOverlay.classList.add('hidden');
+    hud.classList.remove('hidden');
+    hint.classList.remove('hidden');
+    requestAnimationFrame(renderLoop);
+  }catch(e){
+    started = false;
+    alert('Camera error: ' + e.message);
+  }
+});
+
+const FIST_HOLD_MS = 1000;
+let fistStartTime = null;
+let puzzleActive = false;
+let currentGridSize = 4;
+let capturedImageDataUrl = null;
+let puzzlePieces = [];
+let slots = [];
+let moveCount = 0;
+let timerInterval = null;
+let timerSeconds = 0;
+let puzzleSolved = false;
+let boardPixelSize = 0;
+let dragState = null;
+
+function checkFistHold(){
+  if (puzzleActive){
+    fistStartTime = null;
+    setFistProgress(0);
+    return;
+  }
+  if (currentHands.length > 0){
+    const { openness } = analyzeHand(currentHands[0]);
+    if (openness <= 0.2){
+      if (fistStartTime === null) fistStartTime = performance.now();
+      const held = performance.now() - fistStartTime;
+      setFistProgress(Math.min(held / FIST_HOLD_MS, 1));
+      if (held >= FIST_HOLD_MS){
+        fistStartTime = null;
+        setFistProgress(0);
+        startAutoCaptureFlow();
+      }
+    } else {
+      fistStartTime = null;
+      setFistProgress(0);
+    }
+  } else {
+    fistStartTime = null;
+    setFistProgress(0);
+  }
+}
+
+function setFistProgress(ratio){
+  fistProgressFill.style.width = (ratio * 100).toFixed(0) + '%';
+  uiHoldLabel.innerText = Math.round(ratio * 100) + '%';
+}
+
+function grabFrameDataUrl(){
+  const shot = document.createElement('canvas');
+  shot.width = videoElement.videoWidth || width;
+  shot.height = videoElement.videoHeight || height;
+  const sctx = shot.getContext('2d');
+  sctx.translate(shot.width, 0);
+  sctx.scale(-1, 1);
+  sctx.drawImage(videoElement, 0, 0, shot.width, shot.height);
+  return shot.toDataURL('image/png');
+}
+
+function startAutoCaptureFlow(){
+  if (puzzleActive) return;
+  puzzleActive = true;
+  capturedImageDataUrl = grabFrameDataUrl();
+
+  flashOverlay.classList.add('flash-active');
+  setTimeout(()=> flashOverlay.classList.remove('flash-active'), 450);
+
+  setTimeout(()=>{
+    videoElement.style.opacity = '0';
+    mainCanvas.style.opacity = '0';
+    hud.classList.add('hidden');
+    hint.classList.add('hidden');
+
+    revealImage.src = capturedImageDataUrl;
+    revealImage.style.animation = 'none';
+    void revealImage.offsetWidth;
+    revealImage.style.animation = '';
+    photoReveal.classList.add('active');
+
+    setTimeout(()=>{
+      photoReveal.classList.remove('active');
+      setTimeout(()=>{
+        launchPuzzle(capturedImageDataUrl, currentGridSize);
+      }, 500);
+    }, 2000);
+  }, 200);
+}
+
+function launchPuzzle(dataUrl, gridSize){
+  const img = new Image();
+  img.onload = ()=> buildPuzzle(img, gridSize);
+  img.src = dataUrl;
+}
+
+function slotRowCol(slotIndex, gridSize){
+  return { row: Math.floor(slotIndex / gridSize), col: slotIndex % gridSize };
+}
+
+function shuffleArray(arr){
+  for (let i = arr.length - 1; i > 0; i--){
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+function buildPuzzle(img, gridSize){
+  currentGridSize = gridSize;
+  puzzleSolved = false;
+  moveCount = 0;
+  timerSeconds = 0;
+  puzzleMovesEl.innerText = '0';
+  puzzleTimerEl.innerText = '00:00';
+  clearInterval(timerInterval);
+
+  victoryOverlay.classList.remove('active');
+  puzzleBoard.classList.remove('solved-reveal');
+  puzzleBoard.style.backgroundImage = '';
+  puzzleScreen.classList.add('active');
+
+  const srcSize = Math.min(img.width, img.height);
+  const srcX = (img.width - srcSize) / 2;
+  const srcY = (img.height - srcSize) / 2;
+
+  boardPixelSize = Math.floor(Math.min(window.innerWidth * 0.92, window.innerHeight * 0.6, 600));
+  puzzleBoard.style.width = boardPixelSize + 'px';
+  puzzleBoard.style.height = boardPixelSize + 'px';
+  puzzleBoard.innerHTML = '';
+
+  const cellSize = boardPixelSize / gridSize;
+  const sliceSize = srcSize / gridSize;
+
+  const pieceRenderSize = 260;
+  const pieceCanvas = document.createElement('canvas');
+  pieceCanvas.width = pieceRenderSize;
+  pieceCanvas.height = pieceRenderSize;
+  const pctx = pieceCanvas.getContext('2d');
+
+  const pieceDataUrls = [];
+  for (let row = 0; row < gridSize; row++){
+    for (let col = 0; col < gridSize; col++){
+      pctx.clearRect(0, 0, pieceRenderSize, pieceRenderSize);
+      pctx.drawImage(
+        img,
+        srcX + col * sliceSize, srcY + row * sliceSize, sliceSize, sliceSize,
+        0, 0, pieceRenderSize, pieceRenderSize
+      );
+      pieceDataUrls.push(pieceCanvas.toDataURL('image/png'));
+    }
+  }
+
+  slots = [];
+  const totalCells = gridSize * gridSize;
+  for (let i = 0; i < totalCells; i++){
+    const { row, col } = slotRowCol(i, gridSize);
+    const slot = document.createElement('div');
+    slot.className = 'puzzle-slot';
+    slot.style.width = cellSize + 'px';
+    slot.style.height = cellSize + 'px';
+    slot.style.left = (col * cellSize) + 'px';
+    slot.style.top = (row * cellSize) + 'px';
+    puzzleBoard.appendChild(slot);
+    slots.push(slot);
+  }
+
+  let order = [...Array(totalCells).keys()];
+  shuffleArray(order);
+  if (totalCells > 1 && order.every((v, i) => v === i)){
+    [order[0], order[1]] = [order[1], order[0]];
+  }
+
+  puzzlePieces = [];
+  for (let correctIndex = 0; correctIndex < totalCells; correctIndex++){
+    const piece = document.createElement('div');
+    piece.className = 'puzzle-piece piece-shuffle-in';
+    piece.style.backgroundImage = `url(${pieceDataUrls[correctIndex]})`;
+    piece.style.width = cellSize + 'px';
+    piece.style.height = cellSize + 'px';
+    piece.dataset.correctIndex = correctIndex;
+
+    const startSlotIndex = order[correctIndex];
+    positionPieceInSlot(piece, startSlotIndex, cellSize);
+
+    piece.style.animationDelay = (correctIndex * 25) + 'ms';
+    piece.addEventListener('animationend', ()=> piece.classList.remove('piece-shuffle-in'), { once:true });
+
+    puzzleBoard.appendChild(piece);
+    puzzlePieces.push(piece);
+    attachDragHandlers(piece);
+  }
+
+  updateLockedStates();
+  startTimer();
+}
+
+function positionPieceInSlot(piece, slotIndex, cellSize){
+  const { row, col } = slotRowCol(slotIndex, currentGridSize);
+  piece.style.left = (col * cellSize) + 'px';
+  piece.style.top = (row * cellSize) + 'px';
+  piece.dataset.slotIndex = slotIndex;
+}
+
+function attachDragHandlers(piece){
+  piece.addEventListener('pointerdown', (e) => onPieceDragStart(e, piece));
+}
+
+function onPieceDragStart(e, piece){
+  if (puzzleSolved) return;
+  if (piece.classList.contains('locked')) return;
+  e.preventDefault();
+  piece.setPointerCapture(e.pointerId);
+
+  const rect = piece.getBoundingClientRect();
+  const boardRect = puzzleBoard.getBoundingClientRect();
+
+  dragState = {
+    piece,
+    pointerId: e.pointerId,
+    offsetX: e.clientX - rect.left,
+    offsetY: e.clientY - rect.top,
+    boardRect
+  };
+
+  piece.classList.add('dragging');
+  piece.style.zIndex = 50;
+  piece.style.transition = 'none';
+
+  piece.addEventListener('pointermove', onPieceDragMove);
+  piece.addEventListener('pointerup', onPieceDragEnd);
+  piece.addEventListener('pointercancel', onPieceDragEnd);
+}
+
+function onPieceDragMove(e){
+  if (!dragState || dragState.piece !== e.currentTarget) return;
+  const { boardRect, offsetX, offsetY } = dragState;
+  const x = e.clientX - boardRect.left - offsetX;
+  const y = e.clientY - boardRect.top - offsetY;
+  dragState.piece.style.left = x + 'px';
+  dragState.piece.style.top = y + 'px';
+}
+
+function onPieceDragEnd(e){
+  const piece = dragState ? dragState.piece : e.currentTarget;
+  piece.removeEventListener('pointermove', onPieceDragMove);
+  piece.removeEventListener('pointerup', onPieceDragEnd);
+  piece.removeEventListener('pointercancel', onPieceDragEnd);
+  piece.classList.remove('dragging');
+  piece.style.zIndex = '';
+  piece.style.transition = '';
+
+  if (!dragState) return;
+
+  const cellSize = boardPixelSize / currentGridSize;
+  const centerX = parseFloat(piece.style.left) + cellSize / 2;
+  const centerY = parseFloat(piece.style.top) + cellSize / 2;
+
+  let targetCol = Math.floor(centerX / cellSize);
+  let targetRow = Math.floor(centerY / cellSize);
+  targetCol = Math.max(0, Math.min(currentGridSize - 1, targetCol));
+  targetRow = Math.max(0, Math.min(currentGridSize - 1, targetRow));
+  const targetSlotIndex = targetRow * currentGridSize + targetCol;
+  const currentSlotIndex = parseInt(piece.dataset.slotIndex, 10);
+
+  if (targetSlotIndex !== currentSlotIndex){
+    const occupant = puzzlePieces.find(p =>
+      p !== piece &&
+      !p.classList.contains('locked') &&
+      parseInt(p.dataset.slotIndex, 10) === targetSlotIndex
+    );
+    if (occupant){
+      positionPieceInSlot(occupant, currentSlotIndex, cellSize);
+    }
+    positionPieceInSlot(piece, targetSlotIndex, cellSize);
+    moveCount++;
+    puzzleMovesEl.innerText = moveCount;
+  } else {
+    positionPieceInSlot(piece, currentSlotIndex, cellSize);
+  }
+
+  dragState = null;
+  updateLockedStates();
+  checkWinCondition();
+}
+
+function updateLockedStates(){
+  puzzlePieces.forEach(piece => {
+    const correct = parseInt(piece.dataset.correctIndex, 10) === parseInt(piece.dataset.slotIndex, 10);
+    piece.classList.toggle('locked', correct);
+  });
+}
+
+function startTimer(){
+  timerSeconds = 0;
+  puzzleTimerEl.innerText = '00:00';
+  timerInterval = setInterval(()=>{
+    timerSeconds++;
+    puzzleTimerEl.innerText = formatTime(timerSeconds);
+  }, 1000);
+}
+
+function formatTime(s){
+  const m = Math.floor(s / 60).toString().padStart(2, '0');
+  const sec = (s % 60).toString().padStart(2, '0');
+  return `${m}:${sec}`;
+}
+
+function checkWinCondition(){
+  const solved = puzzlePieces.every(p =>
+    parseInt(p.dataset.correctIndex, 10) === parseInt(p.dataset.slotIndex, 10)
+  );
+  if (solved && !puzzleSolved){
+    puzzleSolved = true;
+    clearInterval(timerInterval);
+    setTimeout(triggerVictory, 300);
+  }
+}
+
+function triggerVictory(){
+  puzzleBoard.style.backgroundImage = `url(${capturedImageDataUrl})`;
+  puzzleBoard.classList.add('solved-reveal');
+  victoryTimeEl.innerText = formatTime(timerSeconds);
+  victoryMovesEl.innerText = moveCount;
+  setTimeout(()=>{
+    victoryOverlay.classList.add('active');
+    launchConfetti();
+  }, 550);
+}
+
+function launchConfetti(){
+  confettiCanvas.width = window.innerWidth;
+  confettiCanvas.height = window.innerHeight;
+  const cctx = confettiCanvas.getContext('2d');
+  const colors = ['#7CFFB2', '#0fd6c9', '#ffd166', '#ff6b6b', '#4facfe'];
+  const particles = Array.from({ length: 150 }, () => ({
+    x: Math.random() * confettiCanvas.width,
+    y: -20 - Math.random() * confettiCanvas.height * 0.5,
+    w: 5 + Math.random() * 6,
+    h: 8 + Math.random() * 8,
+    color: colors[Math.floor(Math.random() * colors.length)],
+    speedY: 2 + Math.random() * 3,
+    speedX: -1.5 + Math.random() * 3,
+    rotation: Math.random() * 360,
+    rotSpeed: -8 + Math.random() * 16
+  }));
+  const startTs = performance.now();
+
+  function frame(ts){
+    cctx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height);
+    particles.forEach(p => {
+      p.x += p.speedX;
+      p.y += p.speedY;
+      p.rotation += p.rotSpeed;
+      cctx.save();
+      cctx.translate(p.x, p.y);
+      cctx.rotate(p.rotation * Math.PI / 180);
+      cctx.fillStyle = p.color;
+      cctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      cctx.restore();
+    });
+    if (ts - startTs < 4500){
+      requestAnimationFrame(frame);
+    } else {
+      cctx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height);
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+restartPuzzleBtn.addEventListener('click', ()=>{
+  if (!capturedImageDataUrl) return;
+  launchPuzzle(capturedImageDataUrl, currentGridSize);
+});
+
+newPhotoBtn.addEventListener('click', resetToCamera);
+
+playAgainBtn.addEventListener('click', ()=>{
+  victoryOverlay.classList.remove('active');
+  if (capturedImageDataUrl) launchPuzzle(capturedImageDataUrl, currentGridSize);
+});
+
+sizeButtons.forEach(btn => {
+  btn.addEventListener('click', ()=>{
+    sizeButtons.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentGridSize = parseInt(btn.dataset.size, 10);
+    if (capturedImageDataUrl){
+      launchPuzzle(capturedImageDataUrl, currentGridSize);
+    }
+  });
+});
+
+function resetToCamera(){
+  puzzleScreen.classList.remove('active');
+  victoryOverlay.classList.remove('active');
+  clearInterval(timerInterval);
+  puzzleBoard.classList.remove('solved-reveal');
+  puzzleBoard.style.backgroundImage = '';
+  puzzleBoard.innerHTML = '';
+
+  videoElement.style.opacity = '1';
+  mainCanvas.style.opacity = '1';
+  hud.classList.remove('hidden');
+  hint.classList.remove('hidden');
+
+  puzzleActive = false;
+  capturedImageDataUrl = null;
+  puzzlePieces = [];
+  slots = [];
+}
+
+window.addEventListener('resize', ()=>{
+  if (puzzleScreen.classList.contains('active') && !puzzleSolved && puzzlePieces.length){
+    boardPixelSize = Math.floor(Math.min(window.innerWidth * 0.92, window.innerHeight * 0.6, 600));
+    puzzleBoard.style.width = boardPixelSize + 'px';
+    puzzleBoard.style.height = boardPixelSize + 'px';
+    const cellSize = boardPixelSize / currentGridSize;
+
+    slots.forEach((slot, i) => {
+      const { row, col } = slotRowCol(i, currentGridSize);
+      slot.style.width = cellSize + 'px';
+      slot.style.height = cellSize + 'px';
+      slot.style.left = (col * cellSize) + 'px';
+      slot.style.top = (row * cellSize) + 'px';
+    });
+
+    puzzlePieces.forEach(p => {
+      p.style.width = cellSize + 'px';
+      p.style.height = cellSize + 'px';
+      positionPieceInSlot(p, parseInt(p.dataset.slotIndex, 10), cellSize);
+    });
+  }
+});
+</script>
+
+<style>
+  @keyframes pieceDropIn{
+    from{ opacity:0; transform:scale(0.4) rotate(14deg); }
+    to{ opacity:1; transform:scale(1) rotate(0deg); }
+  }
+  .piece-shuffle-in{
+    animation-name:pieceDropIn;
+    animation-duration:0.5s;
+    animation-timing-function:cubic-bezier(0.34,1.56,0.64,1);
+    animation-fill-mode:both;
+  }
+</style>
+
+</body>
+</html>
